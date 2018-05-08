@@ -38,6 +38,7 @@ type Configuration struct {
 func HandleRequest(event AutoscalingEvent) (string, error) {
 	var ok bool
 	var err error
+	const zabbixHostDisable = 1
 
 	log.Print("Initializing environement")
 
@@ -89,7 +90,7 @@ func HandleRequest(event AutoscalingEvent) (string, error) {
 			log.Printf("Disabling zabbix host %s", host.HostId)
 			_, err := api.CallWithError("host.update", zabbix.Params{
 				"hostid": host.HostId,
-				"status": 1,
+				"status": zabbixHostDisable,
 			})
 			if err != nil {
 				return "Error disabling host from zabbix api", err
