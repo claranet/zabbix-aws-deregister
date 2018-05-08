@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"strconv"
 
@@ -37,6 +38,9 @@ type Configuration struct {
 func HandleRequest(event AutoscalingEvent) (string, error) {
 	var ok bool
 	var err error
+
+	log.Print("Initializing environement")
+
 	configuration := Configuration{}
 	configuration.Url, ok = os.LookupEnv("ZABBIX_URL")
 	if !ok {
@@ -52,43 +56,51 @@ func HandleRequest(event AutoscalingEvent) (string, error) {
 	}
 	configuration.Deleting, err = strconv.ParseBool(os.Getenv("DELETING_HOST"))
 	if err != nil {
-		panic(err)
+		return "Error parsing boolean value from DELETING_HOST environment variable", err
 	}
 
 	searchInventory := make(map[string]string)
 	searchInventory["alias"] = event.Detail.InstanceId
 
+	log.Print("Connecting to zabbix api")
 	api := zabbix.NewAPI(configuration.Url)
+	log.Print("Authentificating to zabbix api")
 	_, err = api.Login(configuration.User, configuration.Password)
 	if err != nil {
-		panic(err)
+		return "Error loging to zabbix api", err
 	}
+	log.Printf("Getting zabbix host corresponding to instanceid %s", event.Detail.InstanceId)
 	res, err := api.HostsGet(zabbix.Params{
 		"output":          []string{"host"},
 		"selectInventory": []string{"alias"},
 		"searchInventory": searchInventory,
 	})
 	if err != nil {
-		panic(err)
+		return "Error getting hosts from zabbix api", err
 	}
 	for _, host := range res {
 		if configuration.Deleting {
+			log.Printf("Deleting zabbix host %s", host.HostId)
 			_, err := api.CallWithError("host.delete", []string{host.HostId})
 			if err != nil {
-				panic(err)
+				return "Error deleting host from zabbix api", err
 			}
 		} else {
+			log.Printf("Disabling zabbix host %s", host.HostId)
 			_, err := api.CallWithError("host.update", zabbix.Params{
 				"hostid": host.HostId,
 				"status": 1,
 			})
 			if err != nil {
-				panic(err)
+				return "Error disabling host from zabbix api", err
+
 			}
 		}
 	}
 
-	return fmt.Sprintf("Zabbix host correspondig to AWS instanceid %s has been disabled", event.Detail.InstanceId), nil
+	log.Print("Function finished successfully")
+
+	return fmt.Sprintf("Zabbix host corresponding to AWS instanceid %s has been scaled down", event.Detail.InstanceId), nil
 }
 
 func main() {
