@@ -9,16 +9,22 @@ import (
 	"github.com/aws/aws-lambda-go/lambda"
 )
 
-type AutoscalingEvent struct {
+type AutoscalingEventDetails struct {
 	InstanceId           string `json:"EC2InstanceId"`
 	EndTime              string `json:"EndTime"`
 	StartTime            string `json:"StartTime"`
 	AutoScalingGroupName string `json:"AutoScalingGroupName"`
 	Cause                string `json:"Cause"`
-	ActivityId           string `json:"ActivityId"`
-	RequestId            string `json:"RequestId"`
 	Description          string `json:"Description"`
 	StatusCode           string `json:"StatusCode"`
+}
+type AutoscalingEvent struct {
+	DetailType string                  `json:"detail-type"`
+	Source     string                  `json:"source"`
+	Account    string                  `json:"account"`
+	Time       string                  `json:"time"`
+	Region     string                  `json:"region"`
+	Detail     AutoscalingEventDetails `json:"detail"`
 }
 
 type Configuration struct {
@@ -31,12 +37,7 @@ type Configuration struct {
 func HandleRequest(event AutoscalingEvent) (string, error) {
 	var ok bool
 	var err error
-	configuration := Configuration{
-		// Url:      os.Getenv("ZABBIX_URL"),
-		// User:     os.Getenv("ZABBIX_USER"),
-		// Password: os.Getenv("ZABBIX_PASS"),
-		// Deleting: deletingHost,
-	}
+	configuration := Configuration{}
 	configuration.Url, ok = os.LookupEnv("ZABBIX_URL")
 	if !ok {
 		panic("ZABBIX_URL not set")
@@ -55,7 +56,7 @@ func HandleRequest(event AutoscalingEvent) (string, error) {
 	}
 
 	searchInventory := make(map[string]string)
-	searchInventory["alias"] = event.InstanceId
+	searchInventory["alias"] = event.Detail.InstanceId
 
 	api := zabbix.NewAPI(configuration.Url)
 	_, err = api.Login(configuration.User, configuration.Password)
@@ -63,7 +64,6 @@ func HandleRequest(event AutoscalingEvent) (string, error) {
 		panic(err)
 	}
 	res, err := api.HostsGet(zabbix.Params{
-		// "hostids":         []string{"100040"},
 		"output":          []string{"host"},
 		"selectInventory": []string{"alias"},
 		"searchInventory": searchInventory,
@@ -88,7 +88,7 @@ func HandleRequest(event AutoscalingEvent) (string, error) {
 		}
 	}
 
-	return fmt.Sprintf("Zabbix host correspondig to AWS instanceid %s has been disabled", event.InstanceId), nil
+	return fmt.Sprintf("Zabbix host correspondig to AWS instanceid %s has been disabled", event.Detail.InstanceId), nil
 }
 
 func main() {
