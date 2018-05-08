@@ -73,12 +73,12 @@ func HandleRequest(event AutoscalingEvent) (string, error) {
 	}
 	for _, host := range res {
 		if configuration.Deleting {
-			err := api.HostsDeleteByIds([]string{host.HostId})
+			_, err := api.CallWithError("host.delete", []string{host.HostId})
 			if err != nil {
 				panic(err)
 			}
 		} else {
-			_, err := api.Call("host.update", zabbix.Params{
+			_, err := api.CallWithError("host.update", zabbix.Params{
 				"hostid": host.HostId,
 				"status": 1,
 			})
