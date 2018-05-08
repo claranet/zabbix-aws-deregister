@@ -79,17 +79,21 @@ func HandleRequest(event AutoscalingEvent) (string, error) {
 	if err != nil {
 		return "Error getting hosts from zabbix api", err
 	}
-	for _, host := range res {
+	if len(res) < 1 {
+		return "Error analyzing hosts list value", fmt.Errorf("Zabbix host not found for instanceid %s", event.Detail.InstanceId)
+	} else if len(res) > 1 {
+		return "Error analyzing hosts list value", fmt.Errorf("More than one host found for instanceid %s", event.Detail.InstanceId)
+	} else {
 		if configuration.Deleting {
-			log.Printf("Deleting zabbix host %s", host.HostId)
-			_, err := api.CallWithError("host.delete", []string{host.HostId})
+			log.Printf("Deleting zabbix host %s", res[0].HostId)
+			_, err := api.CallWithError("host.delete", []string{res[0].HostId})
 			if err != nil {
 				return "Error deleting host from zabbix api", err
 			}
 		} else {
-			log.Printf("Disabling zabbix host %s", host.HostId)
+			log.Printf("Disabling zabbix host %s", res[0].HostId)
 			_, err := api.CallWithError("host.update", zabbix.Params{
-				"hostid": host.HostId,
+				"hostid": res[0].HostId,
 				"status": zabbixHostDisable,
 			})
 			if err != nil {
