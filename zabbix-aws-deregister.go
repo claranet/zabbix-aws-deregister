@@ -2,7 +2,9 @@ package main
 
 import (
 	"fmt"
+	"io/ioutil"
 	"log"
+	"net/http"
 	"os"
 	"strconv"
 
@@ -36,6 +38,7 @@ type Configuration struct {
 }
 
 func HandleRequest(event AutoscalingEvent) (string, error) {
+
 	var ok bool
 	var err error
 	const zabbixHostDisable = 1
@@ -45,15 +48,15 @@ func HandleRequest(event AutoscalingEvent) (string, error) {
 	configuration := Configuration{}
 	configuration.Url, ok = os.LookupEnv("ZABBIX_URL")
 	if !ok {
-		panic("ZABBIX_URL not set")
+		return "Error parsing ZABBIX_URL environment variable", fmt.Errorf("ZABBIX_URL environement variable not set")
 	}
 	configuration.User, ok = os.LookupEnv("ZABBIX_USER")
 	if !ok {
-		panic("ZABBIX_USER not set")
+		return "Error parsing ZABBIX_USER environment variable", fmt.Errorf("ZABBIX_USER environement variable not set")
 	}
 	configuration.Password, ok = os.LookupEnv("ZABBIX_PASS")
 	if !ok {
-		panic("ZABBIX_PASS not set")
+		return "Error parsing ZABBIX_PASS environment variable", fmt.Errorf("ZABBIX_PASS environement variable not set")
 	}
 	configuration.Deleting, err = strconv.ParseBool(os.Getenv("DELETING_HOST"))
 	if err != nil {
@@ -62,6 +65,15 @@ func HandleRequest(event AutoscalingEvent) (string, error) {
 
 	searchInventory := make(map[string]string)
 	searchInventory["alias"] = event.Detail.InstanceId
+
+	resp, err := http.Get("http://ip.clara.net")
+	if err != nil {
+		return "Error getting internet ip address", err
+	}
+	defer resp.Body.Close()
+	bodyBytes, _ := ioutil.ReadAll(resp.Body)
+	bodyString := string(bodyBytes)
+	log.Printf("Lambda outbound traffic from : %s", bodyString)
 
 	log.Print("Connecting to zabbix api")
 	api := zabbix.NewAPI(configuration.Url)
