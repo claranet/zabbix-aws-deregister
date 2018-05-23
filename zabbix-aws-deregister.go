@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -30,20 +31,33 @@ type AutoscalingEvent struct {
 	Detail     AutoscalingEventDetails `json:"detail"`
 }
 
+type SnsEvent struct {
+	Type             string `json:"Type"`
+	TopicArn         string `json:"TopicArn"`
+	MessageId        string `json:"MessageId"`
+	Message          string `json:"Message"`
+	Timestamp        string `json:"Timestamp"`
+	SignatureVersion string `json:"SignatureVersion"`
+	Signature        string `json:"Signature"`
+	SigningCertURL   string `json:"SigningCertURL"`
+	UnsubscribeURL   string `json:"UnsubscribeURL"`
+}
+
 type Configuration struct {
 	Url      string
 	User     string
 	Password string
 	Deleting bool
+	Debug    bool
 }
 
-func HandleRequest(event AutoscalingEvent) (string, error) {
+func HandleRequest(snsEvent SnsEvent) (string, error) {
 
 	var ok bool
 	var err error
 	const zabbixHostDisable = 1
 
-	log.Print("Initializing environement")
+	log.Print("Initializing environment")
 
 	configuration := Configuration{}
 	configuration.Url, ok = os.LookupEnv("ZABBIX_URL")
@@ -58,22 +72,54 @@ func HandleRequest(event AutoscalingEvent) (string, error) {
 	if !ok {
 		return "Error parsing ZABBIX_PASS environment variable", fmt.Errorf("ZABBIX_PASS environement variable not set")
 	}
-	configuration.Deleting, err = strconv.ParseBool(os.Getenv("DELETING_HOST"))
+	deletingHost := os.Getenv("DELETING_HOST")
+	if deletingHost != "" {
+		configuration.Deleting, err = strconv.ParseBool(deletingHost)
+		if err != nil {
+			return "Error parsing boolean value from DELETING_HOST environment variable", err
+		}
+	} else {
+		configuration.Deleting = false
+	}
+	debug := os.Getenv("DEBUG")
+	if debug != "" {
+		configuration.Debug, err = strconv.ParseBool(debug)
+		if err != nil {
+			return "Error parsing boolean value from DEBUG environment variable", err
+		}
+	} else {
+		configuration.Debug = false
+	}
+
+	if configuration.Debug {
+		log.Print("Catching SNS Event:")
+		log.Print(snsEvent)
+	}
+
+	autoscalingEvent := &AutoscalingEvent{}
+	err = json.Unmarshal([]byte(snsEvent.Message), autoscalingEvent)
 	if err != nil {
-		return "Error parsing boolean value from DELETING_HOST environment variable", err
+		return "Error cannot unmarshal message from sns event", err
+	}
+
+	if configuration.Debug {
+		log.Print("Parsing autoscale event from sns event:")
+		log.Print(autoscalingEvent)
 	}
 
 	searchInventory := make(map[string]string)
-	searchInventory["alias"] = event.Detail.InstanceId
+	searchInventory["alias"] = autoscalingEvent.Detail.InstanceId
 
-	resp, err := http.Get("http://ip.clara.net")
-	if err != nil {
-		return "Error getting internet ip address", err
+	if configuration.Debug {
+		resp, err := http.Get("http://ip.clara.net")
+		if err != nil {
+			return "Error getting internet ip address", err
+		}
+		defer resp.Body.Close()
+		bodyBytes, _ := ioutil.ReadAll(resp.Body)
+		bodyString := string(bodyBytes)
+		log.Printf("Lambda outbound traffic from : %s", bodyString)
 	}
-	defer resp.Body.Close()
-	bodyBytes, _ := ioutil.ReadAll(resp.Body)
-	bodyString := string(bodyBytes)
-	log.Printf("Lambda outbound traffic from : %s", bodyString)
 
 	log.Print("Connecting to zabbix api")
 	api := zabbix.NewAPI(configuration.Url)
@@ -82,7 +128,7 @@ func HandleRequest(event AutoscalingEvent) (string, error) {
 	if err != nil {
 		return "Error loging to zabbix api", err
 	}
-	log.Printf("Getting zabbix host corresponding to instanceid %s", event.Detail.InstanceId)
+	log.Printf("Getting zabbix host corresponding to instanceid %s", autoscalingEvent.Detail.InstanceId)
 	res, err := api.HostsGet(zabbix.Params{
 		"output":          []string{"host"},
 		"selectInventory": []string{"alias"},
@@ -92,9 +138,9 @@ func HandleRequest(event AutoscalingEvent) (string, error) {
 		return "Error getting hosts from zabbix api", err
 	}
 	if len(res) < 1 {
-		return "Error analyzing hosts list value", fmt.Errorf("Zabbix host not found for instanceid %s", event.Detail.InstanceId)
+		return fmt.Sprintf("Zabbix host not found for instanceid %s", autoscalingEvent.Detail.InstanceId), nil
 	} else if len(res) > 1 {
-		return "Error analyzing hosts list value", fmt.Errorf("More than one host found for instanceid %s", event.Detail.InstanceId)
+		return "Error analyzing hosts list value", fmt.Errorf("More than one host found for instanceid %s", autoscalingEvent.Detail.InstanceId)
 	} else {
 		if configuration.Deleting {
 			log.Printf("Deleting zabbix host %s", res[0].HostId)
@@ -117,7 +163,7 @@ func HandleRequest(event AutoscalingEvent) (string, error) {
 
 	log.Print("Function finished successfully")
 
-	return fmt.Sprintf("Zabbix host corresponding to AWS instanceid %s has been scaled down", event.Detail.InstanceId), nil
+	return fmt.Sprintf("Zabbix host corresponding to AWS instanceid %s has been scaled down", autoscalingEvent.Detail.InstanceId), nil
 }
 
 func main() {
