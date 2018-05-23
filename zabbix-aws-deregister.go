@@ -10,10 +10,11 @@ import (
 	"strconv"
 
 	"github.com/AlekSi/zabbix"
+	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
 )
 
-type AutoscalingEventDetails struct {
+type AutoscalingEvent struct {
 	InstanceId           string `json:"EC2InstanceId"`
 	EndTime              string `json:"EndTime"`
 	StartTime            string `json:"StartTime"`
@@ -21,26 +22,6 @@ type AutoscalingEventDetails struct {
 	Cause                string `json:"Cause"`
 	Description          string `json:"Description"`
 	StatusCode           string `json:"StatusCode"`
-}
-type AutoscalingEvent struct {
-	DetailType string                  `json:"detail-type"`
-	Source     string                  `json:"source"`
-	Account    string                  `json:"account"`
-	Time       string                  `json:"time"`
-	Region     string                  `json:"region"`
-	Detail     AutoscalingEventDetails `json:"detail"`
-}
-
-type SnsEvent struct {
-	Type             string `json:"Type"`
-	TopicArn         string `json:"TopicArn"`
-	MessageId        string `json:"MessageId"`
-	Message          string `json:"Message"`
-	Timestamp        string `json:"Timestamp"`
-	SignatureVersion string `json:"SignatureVersion"`
-	Signature        string `json:"Signature"`
-	SigningCertURL   string `json:"SigningCertURL"`
-	UnsubscribeURL   string `json:"UnsubscribeURL"`
 }
 
 type Configuration struct {
@@ -51,7 +32,7 @@ type Configuration struct {
 	Debug    bool
 }
 
-func HandleRequest(snsEvent SnsEvent) (string, error) {
+func HandleRequest(snsEvents events.SNSEvent) (string, error) {
 
 	var ok bool
 	var err error
@@ -93,13 +74,19 @@ func HandleRequest(snsEvent SnsEvent) (string, error) {
 
 	if configuration.Debug {
 		log.Print("Catching SNS Event:")
-		log.Print(snsEvent)
+		log.Print(snsEvents)
 	}
 
-	autoscalingEvent := &AutoscalingEvent{}
-	err = json.Unmarshal([]byte(snsEvent.Message), autoscalingEvent)
+	var cloudwatchEvent events.CloudWatchEvent
+	err = json.Unmarshal([]byte(snsEvents.Records[0].SNS.Message), &cloudwatchEvent)
 	if err != nil {
 		return "Error cannot unmarshal message from sns event", err
+	}
+
+	var autoscalingEvent AutoscalingEvent
+	err = json.Unmarshal(cloudwatchEvent.Detail, &autoscalingEvent)
+	if err != nil {
+		return "Error cannot unmarshal autoscale detail from cloudwatch event", err
 	}
 
 	if configuration.Debug {
@@ -108,7 +95,7 @@ func HandleRequest(snsEvent SnsEvent) (string, error) {
 	}
 
 	searchInventory := make(map[string]string)
-	searchInventory["alias"] = autoscalingEvent.Detail.InstanceId
+	searchInventory["alias"] = autoscalingEvent.InstanceId
 
 	if configuration.Debug {
 		resp, err := http.Get("http://ip.clara.net")
@@ -128,7 +115,7 @@ func HandleRequest(snsEvent SnsEvent) (string, error) {
 	if err != nil {
 		return "Error loging to zabbix api", err
 	}
-	log.Printf("Getting zabbix host corresponding to instanceid %s", autoscalingEvent.Detail.InstanceId)
+	log.Printf("Getting zabbix host corresponding to instanceid %s", autoscalingEvent.InstanceId)
 	res, err := api.HostsGet(zabbix.Params{
 		"output":          []string{"host"},
 		"selectInventory": []string{"alias"},
@@ -138,9 +125,9 @@ func HandleRequest(snsEvent SnsEvent) (string, error) {
 		return "Error getting hosts from zabbix api", err
 	}
 	if len(res) < 1 {
-		return fmt.Sprintf("Zabbix host not found for instanceid %s", autoscalingEvent.Detail.InstanceId), nil
+		return fmt.Sprintf("Zabbix host not found for instanceid %s", autoscalingEvent.InstanceId), nil
 	} else if len(res) > 1 {
-		return "Error analyzing hosts list value", fmt.Errorf("More than one host found for instanceid %s", autoscalingEvent.Detail.InstanceId)
+		return "Error analyzing hosts list value", fmt.Errorf("More than one host found for instanceid %s", autoscalingEvent.InstanceId)
 	} else {
 		if configuration.Deleting {
 			log.Printf("Deleting zabbix host %s", res[0].HostId)
@@ -163,7 +150,7 @@ func HandleRequest(snsEvent SnsEvent) (string, error) {
 
 	log.Print("Function finished successfully")
 
-	return fmt.Sprintf("Zabbix host corresponding to AWS instanceid %s has been scaled down", autoscalingEvent.Detail.InstanceId), nil
+	return fmt.Sprintf("Zabbix host corresponding to AWS instanceid %s has been scaled down", autoscalingEvent.InstanceId), nil
 }
 
 func main() {
