@@ -57,7 +57,7 @@ Description: AWS InstanceID from metadata
 A new UserParameter needs to be added to retrieve the AWS instanceId:
 
 ```shell
-echo 'UserParameter=aws.metadata[*],curl -s http://169.254.169.254/latest/meta-data/$1' > /etc/zabbix/zabbix_agentd.d/aws.conf
+echo "UserParameter=aws.metadata[*],bash -c 'if [[ \"\$1\" == *\"security-credentials\"* ]]; then echo \"permissions denied\"; else curl -s http://169.254.169.254/latest/meta-data/$1; fi'" >> /etc/zabbix/zabbix_agentd.d/aws.conf
 service zabbix-agent restart
 ```
 
@@ -86,16 +86,18 @@ The following resources should be created :
     "Statement": [
         {
             "Action": [
-                "logs:CreateLogStream"
+                "logs:CreateLogGroup",
+                "logs:DescribeLogStreams",
             ],
             "Resource": [
-                "arn:aws:logs:eu-west-1:424242424242:log-group:/aws/lambda/zabbix-aws-deregister:*"
+                "arn:aws:logs:eu-west-1:424242424242:*"
             ],
             "Effect": "Allow"
         },
         {
             "Action": [
-                "logs:PutLogEvents"
+                "logs:CreateLogStream",
+                "logs:PutLogEvents",
             ],
             "Resource": [
                 "arn:aws:logs:eu-west-1:424242424242:log-group:/aws/lambda/zabbix-aws-deregister:*:*"
@@ -129,11 +131,14 @@ Environment variables:
     ZABBIX_USER: previously created user from "Zabbix administration" step (aws-autoScaling-deregister)
     ZABBIX_PASS: previously created password from "Zabbix administration" step
     DELETING_HOST: true / false
+    DEBUG: true / false
 ```
 
 Notice: if `DELETING_HOST` is set to `false` so zabbix hosts are not deleted, only disabled.
 
-5/ Create the cloudwatch event rule [AWS console > Cloudwatch > Events > Rules > Create rule].
+5/ Create an sns topic and subscribe the previous created lambda on it
+
+6/ Create the cloudwatch event rule [AWS console > Cloudwatch > Events > Rules > Create rule].
 
 a/ Configure Event Source as following :
 
@@ -161,12 +166,11 @@ The event pattern should be :
 }
 ```
 
-b/ Add a new target `Lambda function`:
+b/ Add a new target `SNS topic`:
 
 ```
-Function: zabbix-aws-deregister (previously created lambda function)
-Configure Input: 
-    Part of the matched event: $.detail
+Topic: zabbix-aws-deregister (previously created sns topic)
+Configure Input: Matched event
 ```
 
 c/ Configure rule details:
@@ -184,20 +188,26 @@ it could be named `ScaleDown` and looks like the following json:
 
 ```json
 {
-  "Description": "Terminating EC2 instance: i-070fc7ff625f55529",
-  "Details": {
-    "Subnet ID": "subnet-5c8fb338",
-    "Availability Zone": "eu-west-1b"
-  },
-  "EndTime": "2018-03-06T19:12:44.047Z",
-  "RequestId": "0a2fb0a9-18ee-44f2-bace-47309ef8ab79",
-  "ActivityId": "0a2fb0a9-18ee-44f2-bace-47309ef8ab79",
-  "Cause": "At 2018-03-06T19:11:33Z a user request update of AutoScalingGroup constraints to min: 0, max: 2, desired: 0 changing the desired capacity from 1 to 0.  At 2018-03-06T19:11:42Z an instance was taken out of service in response to a difference between desired and actual capacity, shrinking the capacity from 1 to 0.  At 2018-03-06T19:11:42Z instance i-070fc7ff625f55529 was selected for termination.",
-  "AutoScalingGroupName": "test-asg",
-  "StartTime": "2018-03-06T19:11:42.182Z",
-  "EC2InstanceId": "i-070fc7ff625f55529",
-  "StatusCode": "InProgress",
-  "StatusMessage": ""
+  "Records": [
+    {
+      "EventVersion": "1.0",
+      "EventSubscriptionArn": "arn:aws:sns:eu-west-1:424242424242:test-zabbix:76f12898-fd88-4c72-9fa0-fa0793a98acf",
+      "EventSource": "aws:sns",
+      "Sns": {
+        "Signature": "sRgkFMVQwHihlUmLB4u6HkdSw2z8f2uUsFXW/fJOJ8pb07G/Gbn8d+DQujIgaXg2Mx+YNrh3iclG7Llcmo/11h3HFPQMJ5HYYzN9RH0H/hAYjByl8Sx1TwxR8+9AhO0IXCrmCNz9n5egpOdglH/B3oV1z4aEMXLoHh3C8CIuWy7uyWiCgWT3cd3fq891GtRbMofQeCORqqocGvBEYf6rFttPP/lMg/VtyOtSxRKa9QA9xSBqOuGZAdr2G1saYJ3y1Nr4vIWy12VZ0B4glnp7mEwjcwrrgXjqIUnQoGfICDaxaJNVf4PZtggUDICbfgqeqO9+g5PU7fCsLHbBfVkuIA==",
+        "MessageId": "723a5c6d-33df-5057-a9b8-0fedcf8f6654",
+        "Type": "Notification",
+        "TopicArn": "arn:aws:sns:eu-west-1:424242424242:test-zabbix",
+        "MessageAttributes": {},
+        "SignatureVersion": "1",
+        "Timestamp": "2018-05-24T17:44:48.887Z",
+        "SigningCertUrl": "https://sns.eu-west-1.amazonaws.com/SimpleNotificationService-eaea6120e66ea12e88dcd8bcbddca752.pem",
+        "Message": "{\"version\":\"0\",\"id\":\"c2cf5c1e-e2bd-30ef-2524-7ffb7d579931\",\"detail-type\":\"EC2 Instance Terminate Successful\",\"source\":\"aws.autoscaling\",\"account\":\"424242424242\",\"time\":\"2018-05-24T17:44:48Z\",\"region\":\"eu-west-1\",\"resources\":[\"arn:aws:autoscaling:eu-west-1:424242424242:autoScalingGroup:dde9d75e-bb6e-4718-8840-9a3dc6a0af80:autoScalingGroupName/as.datadog-sandbox.default.webfront\",\"arn:aws:ec2:eu-west-1:424242424242:instance/i-0926bd0a06518bf44\"],\"detail\":{\"Description\":\"Terminating EC2 instance: i-0926bd0a06518bf44\",\"Details\":{\"Subnet ID\":\"subnet-5767c533\",\"Availability Zone\":\"eu-west-1b\"},\"EndTime\":\"2018-05-24T17:44:48.562Z\",\"RequestId\":\"66259088-028e-46da-ab24-9dc2b68e2607\",\"ActivityId\":\"66259088-028e-46da-ab24-9dc2b68e2607\",\"Cause\":\"At 2018-05-24T17:43:54Z a user request update of AutoScalingGroup constraints to min: 0, max: 2, desired: 0 changing the desired capacity from 1 to 0.  At 2018-05-24T17:44:06Z an instance was taken out of service in response to a difference between desired and actual capacity, shrinking the capacity from 1 to 0.  At 2018-05-24T17:44:06Z instance i-0926bd0a06518bf44 was selected for termination.\",\"AutoScalingGroupName\":\"as.datadog-sandbox.default.webfront\",\"StartTime\":\"2018-05-24T17:44:06.609Z\",\"EC2InstanceId\":\"i-0926bd0a06518bf44\",\"StatusCode\":\"InProgress\",\"StatusMessage\":\"\"}}",
+        "UnsubscribeUrl": "https://sns.eu-west-1.amazonaws.com/?Action=Unsubscribe&SubscriptionArn=arn:aws:sns:eu-west-1:424242424242:test-zabbix:76f12898-fd88-4c72-9fa0-fa0793a98acf",
+        "Subject": ""
+      }
+    }
+  ]
 }
 ```
 
