@@ -9,9 +9,13 @@ import (
 	"os"
 	"strconv"
 
+	"encoding/base64"
+
 	"github.com/AlekSi/zabbix"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/kms"
 )
 
 // AutoscalingEvent structure to serialize json from Message attribute of CloudwatchEvent
@@ -25,7 +29,7 @@ type AutoscalingEvent struct {
 	StatusCode           string `json:"StatusCode"`
 }
 
-// Configuration structure to store configuration for the lambda function
+// Configuration structure to store Config for the lambda function
 type Configuration struct {
 	URL      string
 	User     string
@@ -34,58 +38,92 @@ type Configuration struct {
 	Debug    bool
 }
 
-// HandleRequest hot start lambda function start point
-func HandleRequest(snsEvents events.SNSEvent) (string, error) {
+const ZabbixHostDisable = 1
 
+var Config Configuration
+
+func decrypt(encrypted string) string {
+	kmsClient := kms.New(session.New())
+	decodedBytes, err := base64.StdEncoding.DecodeString(encrypted)
+	if err != nil {
+		log.Print("impossible to decode string value:")
+		log.Print(err)
+		panic(err)
+	}
+	input := &kms.DecryptInput{
+		CiphertextBlob: decodedBytes,
+	}
+	response, err := kmsClient.Decrypt(input)
+	if err != nil {
+		log.Print("Impossible to decrypt bytes from kms key:")
+		log.Print(err)
+		panic(err)
+	}
+	// Plaintext is a byte array, so convert to string
+	return string(response.Plaintext[:])
+}
+
+func init() {
 	var ok bool
 	var err error
-	const zabbixHostDisable = 1
+	var encryptedUser string
+	var encryptedPass string
 
 	log.Print("Initializing environment")
 
-	configuration := Configuration{}
-	configuration.URL, ok = os.LookupEnv("ZABBIX_URL")
-	if !ok {
-		log.Print("Error parsing ZABBIX_URL environement variable not set")
-		return "", fmt.Errorf("zabbix url not set")
-	}
-	configuration.User, ok = os.LookupEnv("ZABBIX_USER")
+	encryptedUser, ok = os.LookupEnv("ZABBIX_USER")
 	if !ok {
 		log.Print("Error parsing ZABBIX_USER environement variable not set")
-		return "", fmt.Errorf("zabbix user not set")
+		panic(fmt.Errorf("zabbix user not set"))
 	}
-	configuration.Password, ok = os.LookupEnv("ZABBIX_PASS")
+	encryptedPass, ok = os.LookupEnv("ZABBIX_PASS")
 	if !ok {
 		log.Print("Error parsing ZABBIX_PASS environement variable not set")
-		return "", fmt.Errorf("zabbix password not set")
+		panic(fmt.Errorf("zabbix password not set"))
+	}
+
+	Config.User = decrypt(encryptedUser)
+	Config.Password = decrypt(encryptedPass)
+
+	Config.URL, ok = os.LookupEnv("ZABBIX_URL")
+	if !ok {
+		log.Print("Error parsing ZABBIX_URL environement variable not set")
+		panic(fmt.Errorf("zabbix url not set"))
 	}
 	deletingHost := os.Getenv("DELETING_HOST")
 	if deletingHost != "" {
-		configuration.Deleting, err = strconv.ParseBool(deletingHost)
+		Config.Deleting, err = strconv.ParseBool(deletingHost)
 		if err != nil {
 			log.Print("Error parsing boolean value from DELETING_HOST environment variable:")
 			log.Print(err)
-			return "", err
+			panic(err)
 		}
 	} else {
-		configuration.Deleting = false
+		Config.Deleting = false
 	}
 	debug := os.Getenv("DEBUG")
 	if debug != "" {
-		configuration.Debug, err = strconv.ParseBool(debug)
+		Config.Debug, err = strconv.ParseBool(debug)
 		if err != nil {
 			log.Print("Error parsing boolean value from DEBUG environment variable:")
 			log.Print(err)
-			return "", err
+			panic(err)
 		}
 	} else {
-		configuration.Debug = false
+		Config.Debug = false
 	}
+}
 
-	if configuration.Debug {
+// HandleRequest hot start lambda function start point
+func HandleRequest(snsEvents events.SNSEvent) (string, error) {
+
+	var err error
+
+	if Config.Debug {
 		log.Print("Catching SNS event from lambda parameter:")
 		snsEventsJSON, err := json.Marshal(snsEvents)
 		if err != nil {
+			log.Print("Error cannot marshal snsEvents json:")
 			log.Print(err)
 		}
 		log.Print(string(snsEventsJSON))
@@ -99,10 +137,11 @@ func HandleRequest(snsEvents events.SNSEvent) (string, error) {
 		return "", err
 	}
 
-	if configuration.Debug {
+	if Config.Debug {
 		log.Print("Catching CloudWatch event from SNS event:")
 		cloudwatchEventJSON, err := json.Marshal(cloudwatchEvent)
 		if err != nil {
+			log.Print("Error cannot marshal cloudwatchEvent json:")
 			log.Print(err)
 		}
 		log.Print(string(cloudwatchEventJSON))
@@ -121,7 +160,7 @@ func HandleRequest(snsEvents events.SNSEvent) (string, error) {
 	searchInventory := make(map[string]string)
 	searchInventory["alias"] = autoscalingEvent.InstanceID
 
-	if configuration.Debug {
+	if Config.Debug {
 		resp, err := http.Get("http://ip.clara.net")
 		if err != nil {
 			log.Print("Error getting internet ip address:")
@@ -135,9 +174,9 @@ func HandleRequest(snsEvents events.SNSEvent) (string, error) {
 	}
 
 	log.Print("Connecting to zabbix api")
-	api := zabbix.NewAPI(configuration.URL)
+	api := zabbix.NewAPI(Config.URL)
 	log.Print("Authentificating to zabbix api")
-	_, err = api.Login(configuration.User, configuration.Password)
+	_, err = api.Login(Config.User, Config.Password)
 	if err != nil {
 		log.Print("Error loging to zabbix api:")
 		log.Print(err)
@@ -161,7 +200,7 @@ func HandleRequest(snsEvents events.SNSEvent) (string, error) {
 		log.Printf("Error, more than one host found for instanceid %s, do nothing", autoscalingEvent.InstanceID)
 		return "", fmt.Errorf("more than one hosts found")
 	} else {
-		if configuration.Deleting {
+		if Config.Deleting {
 			log.Printf("Deleting zabbix host %s", res[0].HostId)
 			_, err := api.CallWithError("host.delete", []string{res[0].HostId})
 			if err != nil {
@@ -173,7 +212,7 @@ func HandleRequest(snsEvents events.SNSEvent) (string, error) {
 			log.Printf("Disabling zabbix host %s", res[0].HostId)
 			_, err := api.CallWithError("host.update", zabbix.Params{
 				"hostid": res[0].HostId,
-				"status": zabbixHostDisable,
+				"status": ZabbixHostDisable,
 			})
 			if err != nil {
 				log.Print("Error disabling host from zabbix api")

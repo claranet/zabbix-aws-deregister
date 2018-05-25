@@ -77,6 +77,8 @@ The following resources should be created :
 * IAM role
 * Lambda function
 * Cloudwatch event rule
+* SNS topic
+* KMS key
 
 1/ Create the IAM policy `zabbix-aws-deregister` [AWS console > IAM > Policies > Create policy > JSON]:
 
@@ -110,7 +112,17 @@ The following resources should be created :
 
 2/ Create the IAM role `zabbix-aws-deregister` [AWS console > IAM > Roles > Create role > AWS Service > Lambda] attaching the previously created policy `zabbix-aws-deregister`.
 
-3/ Create the lambda function `zabbix-aws-deregister` [AWS console > Lambda > Functions > Create function > Author from scratch]:
+3/ Create the KMS key `zabbix-aws-deregister` in the same region of your lambda [AWS console > IAM > Ecryption Keys > Create Key]:
+
+```
+Alias and Description
+    Alias: lambda/zabbix-aws-deregister
+    Name: zabbix-aws-deregister
+Key Administrative Permissions: add admin aws role(s)
+Key Usage Permissions: add the previously created role
+```
+
+4/ Create the lambda function `zabbix-aws-deregister` [AWS console > Lambda > Functions > Create function > Author from scratch]:
 
 ```
 Name: zabbix-aws-deregister
@@ -119,7 +131,7 @@ Role: Choose an existing role
 Existing role: zabbix-aws-deregister
 ```
 
-4/ Configure the lambda function `zabbix-aws-deregister` as following:
+5/ Configure the lambda function `zabbix-aws-deregister` as following:
 
 ```
 Function code:
@@ -132,13 +144,23 @@ Environment variables:
     ZABBIX_PASS: previously created password from "Zabbix administration" step
     DELETING_HOST: true / false
     DEBUG: true / false
+    Encryption configuration:
+        Enable helpers for encryption in transit: [x]
+        KMS key to encrypt in transit: select the previously created key
+
+Execution role: set the previously created role
+
 ```
+
+Then, click on `encrypt` button for both `ZABBIX_USER` and `ZABBIX_PASS` environment variables.
 
 Notice: if `DELETING_HOST` is set to `false` so zabbix hosts are not deleted, only disabled.
 
-5/ Create an sns topic and subscribe the previous created lambda on it
+6/ Create an sns topic and subscribe [AWS console > SNS > Topics > Create topic]
 
-6/ Create the cloudwatch event rule [AWS console > Cloudwatch > Events > Rules > Create rule].
+7/ Add subscription on sns topic to the previously created lambda
+
+8/ Create the cloudwatch event rule [AWS console > Cloudwatch > Events > Rules > Create rule].
 
 a/ Configure Event Source as following :
 
