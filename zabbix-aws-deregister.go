@@ -46,21 +46,26 @@ func HandleRequest(snsEvents events.SNSEvent) (string, error) {
 	configuration := Configuration{}
 	configuration.URL, ok = os.LookupEnv("ZABBIX_URL")
 	if !ok {
-		return "Error parsing ZABBIX_URL environment variable", fmt.Errorf("ZABBIX_URL environement variable not set")
+		log.Print("Error parsing ZABBIX_URL environement variable not set")
+		return "", fmt.Errorf("zabbix url not set")
 	}
 	configuration.User, ok = os.LookupEnv("ZABBIX_USER")
 	if !ok {
-		return "Error parsing ZABBIX_USER environment variable", fmt.Errorf("ZABBIX_USER environement variable not set")
+		log.Print("Error parsing ZABBIX_USER environement variable not set")
+		return "", fmt.Errorf("zabbix user not set")
 	}
 	configuration.Password, ok = os.LookupEnv("ZABBIX_PASS")
 	if !ok {
-		return "Error parsing ZABBIX_PASS environment variable", fmt.Errorf("ZABBIX_PASS environement variable not set")
+		log.Print("Error parsing ZABBIX_PASS environement variable not set")
+		return "", fmt.Errorf("zabbix password not set")
 	}
 	deletingHost := os.Getenv("DELETING_HOST")
 	if deletingHost != "" {
 		configuration.Deleting, err = strconv.ParseBool(deletingHost)
 		if err != nil {
-			return "Error parsing boolean value from DELETING_HOST environment variable", err
+			log.Print("Error parsing boolean value from DELETING_HOST environment variable:")
+			log.Print(err)
+			return "", err
 		}
 	} else {
 		configuration.Deleting = false
@@ -69,7 +74,9 @@ func HandleRequest(snsEvents events.SNSEvent) (string, error) {
 	if debug != "" {
 		configuration.Debug, err = strconv.ParseBool(debug)
 		if err != nil {
-			return "Error parsing boolean value from DEBUG environment variable", err
+			log.Print("Error parsing boolean value from DEBUG environment variable:")
+			log.Print(err)
+			return "", err
 		}
 	} else {
 		configuration.Debug = false
@@ -87,7 +94,9 @@ func HandleRequest(snsEvents events.SNSEvent) (string, error) {
 	var cloudwatchEvent events.CloudWatchEvent
 	err = json.Unmarshal([]byte(snsEvents.Records[0].SNS.Message), &cloudwatchEvent)
 	if err != nil {
-		return "Error cannot unmarshal message from sns event", err
+		log.Print("Error cannot unmarshal message from sns event:")
+		log.Print(err)
+		return "", err
 	}
 
 	if configuration.Debug {
@@ -104,7 +113,9 @@ func HandleRequest(snsEvents events.SNSEvent) (string, error) {
 	var autoscalingEvent AutoscalingEvent
 	err = json.Unmarshal(cloudwatchEvent.Detail, &autoscalingEvent)
 	if err != nil {
-		return "Error cannot unmarshal autoscale detail from cloudwatch event", err
+		log.Print("Error cannot unmarshal autoscale detail from cloudwatch event:")
+		log.Print(err)
+		return "", err
 	}
 
 	searchInventory := make(map[string]string)
@@ -113,7 +124,9 @@ func HandleRequest(snsEvents events.SNSEvent) (string, error) {
 	if configuration.Debug {
 		resp, err := http.Get("http://ip.clara.net")
 		if err != nil {
-			return "Error getting internet ip address", err
+			log.Print("Error getting internet ip address:")
+			log.Print(err)
+			return "", err
 		}
 		defer resp.Body.Close()
 		bodyBytes, _ := ioutil.ReadAll(resp.Body)
@@ -126,7 +139,9 @@ func HandleRequest(snsEvents events.SNSEvent) (string, error) {
 	log.Print("Authentificating to zabbix api")
 	_, err = api.Login(configuration.User, configuration.Password)
 	if err != nil {
-		return "Error loging to zabbix api", err
+		log.Print("Error loging to zabbix api:")
+		log.Print(err)
+		return "", err
 	}
 	log.Printf("Getting zabbix host corresponding to instanceid %s", autoscalingEvent.InstanceID)
 	res, err := api.HostsGet(zabbix.Params{
@@ -135,18 +150,24 @@ func HandleRequest(snsEvents events.SNSEvent) (string, error) {
 		"searchInventory": searchInventory,
 	})
 	if err != nil {
-		return "Error getting hosts from zabbix api", err
+		log.Print("Error getting hosts from zabbix api:")
+		log.Print(err)
+		return "", err
 	}
 	if len(res) < 1 {
-		return fmt.Sprintf("Zabbix host not found for instanceid %s", autoscalingEvent.InstanceID), nil
+		log.Printf("Zabbix host not found for instanceid %s, do nothing", autoscalingEvent.InstanceID)
+		return fmt.Sprintf("host not found"), nil
 	} else if len(res) > 1 {
-		return "Error analyzing hosts list value", fmt.Errorf("More than one host found for instanceid %s", autoscalingEvent.InstanceID)
+		log.Printf("Error, more than one host found for instanceid %s, do nothing", autoscalingEvent.InstanceID)
+		return "", fmt.Errorf("more than one hosts found")
 	} else {
 		if configuration.Deleting {
 			log.Printf("Deleting zabbix host %s", res[0].HostId)
 			_, err := api.CallWithError("host.delete", []string{res[0].HostId})
 			if err != nil {
-				return "Error deleting host from zabbix api", err
+				log.Print("Error deleting host from zabbix api:")
+				log.Print(err)
+				return "", err
 			}
 		} else {
 			log.Printf("Disabling zabbix host %s", res[0].HostId)
@@ -155,15 +176,16 @@ func HandleRequest(snsEvents events.SNSEvent) (string, error) {
 				"status": zabbixHostDisable,
 			})
 			if err != nil {
-				return "Error disabling host from zabbix api", err
+				log.Print("Error disabling host from zabbix api")
+				log.Print(err)
+				return "", err
 
 			}
 		}
 	}
 
 	log.Print("Function finished successfully")
-
-	return fmt.Sprintf("Zabbix host corresponding to AWS instanceid %s has been scaled down", autoscalingEvent.InstanceID), nil
+	return fmt.Sprintf(autoscalingEvent.InstanceID), nil
 }
 
 func main() {
