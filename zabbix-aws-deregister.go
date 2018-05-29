@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
+	"time"
 
 	"encoding/base64"
 
@@ -37,8 +39,10 @@ type Configuration struct {
 	Deleting bool
 }
 
+// Value corresponding to zabbix host disabled
 const ZabbixHostDisable = 1
 
+// Global configuration structure
 var Config Configuration
 
 func decrypt(encrypted string, variable string) string {
@@ -243,6 +247,7 @@ func HandleRequest(snsEvents events.SNSEvent) (string, error) {
 		"selectInventory": []string{"alias"},
 		"searchInventory": searchInventory,
 	})
+
 	if err != nil {
 		log.WithFields(log.Fields{
 			"stage":    "get",
@@ -262,7 +267,7 @@ func HandleRequest(snsEvents events.SNSEvent) (string, error) {
 		log.WithFields(log.Fields{
 			"stage":    "get",
 			"instance": autoscalingEvent.InstanceID,
-		}).Fatal("More than one zabbix host found")
+		}).Error("More than one zabbix host found")
 		return "", fmt.Errorf("more than one hosts found")
 	} else {
 		if Config.Deleting {
@@ -279,28 +284,41 @@ func HandleRequest(snsEvents events.SNSEvent) (string, error) {
 					"instance": autoscalingEvent.InstanceID,
 					"host":     res[0].HostId,
 					"error":    err,
-				}).Fatal("Deleting zabbix host")
+				}).Error("Deleting zabbix host")
 				return "", err
 			}
 		} else {
+			name := strings.Join([]string{"ZDTP", res[0].Host}, "_")
+			description := strings.Join([]string{"Automatically edited from Zabbix Deregister:", time.Now().String(), "This host needs to be purged:", res[0].Host}, "\n")
+
 			log.WithFields(log.Fields{
-				"stage":    "set",
-				"instance": autoscalingEvent.InstanceID,
-				"host":     res[0].HostId,
-			}).Debug("Disabling zabbix host")
+				"stage":       "set",
+				"instance":    autoscalingEvent.InstanceID,
+				"host":        res[0].HostId,
+				"description": description,
+				"cur_name":    res[0].Host,
+				"new_name":    name,
+				"enabled":     false,
+			}).Debug("Updating zabbix host")
 			_, err := api.CallWithError("host.update", zabbix.Params{
-				"hostid": res[0].HostId,
-				"status": ZabbixHostDisable,
+				"hostid":      res[0].HostId,
+				"host":        name,
+				"name":        name,
+				"description": description,
+				"status":      ZabbixHostDisable,
 			})
 			if err != nil {
 				log.WithFields(log.Fields{
-					"stage":    "set",
-					"instance": autoscalingEvent.InstanceID,
-					"host":     res[0].HostId,
-					"error":    err,
-				}).Fatal("Disabling zabbix host")
+					"stage":       "set",
+					"instance":    autoscalingEvent.InstanceID,
+					"host":        res[0].HostId,
+					"description": description,
+					"cur_name":    res[0].Host,
+					"new_name":    name,
+					"enabled":     false,
+					"error":       err,
+				}).Error("Updating zabbix host")
 				return "", err
-
 			}
 		}
 	}
