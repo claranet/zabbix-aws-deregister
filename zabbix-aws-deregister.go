@@ -87,16 +87,16 @@ func init() {
 	log.SetOutput(os.Stdout)
 	log.SetLevel(log.InfoLevel)
 
-	debug := os.Getenv("DEBUG")
-	if debug != "" {
-		_, err = strconv.ParseBool(debug)
+	debugString := os.Getenv("DEBUG")
+	if debugString != "" {
+		debug, err := strconv.ParseBool(debugString)
 		if err != nil {
 			log.WithFields(log.Fields{
 				"stage":    "config",
 				"error":    err,
 				"variable": "DEBUG",
 			}).Error("Failed to parse boolean")
-		} else {
+		} else if debug {
 			log.SetLevel(log.DebugLevel)
 			log.WithFields(log.Fields{
 				"stage":    "config",
@@ -169,7 +169,7 @@ func HandleRequest(snsEvents events.SNSEvent) (string, error) {
 			"stage": "init",
 			"event": "sns",
 			"err":   err,
-		}).Panic("Failed unmarshal json event")
+		}).Error("Failed unmarshal json event")
 		return "", err
 	}
 
@@ -186,7 +186,7 @@ func HandleRequest(snsEvents events.SNSEvent) (string, error) {
 			"stage": "init",
 			"event": "autoscaling",
 			"err":   err,
-		}).Panic("Failed unmarshal json event")
+		}).Error("Failed unmarshal json event")
 		return "", err
 	}
 
@@ -235,7 +235,7 @@ func HandleRequest(snsEvents events.SNSEvent) (string, error) {
 			"url":   Config.URL,
 			"user":  Config.User,
 			"error": err,
-		}).Panic("Failed to logging on zabbix API")
+		}).Error("Failed to logging on zabbix API")
 		return "", err
 	}
 
@@ -254,7 +254,7 @@ func HandleRequest(snsEvents events.SNSEvent) (string, error) {
 			"stage":    "get",
 			"instance": autoscalingEvent.InstanceID,
 			"error":    err,
-		}).Panic("Failed searching for corresponding zabbix host")
+		}).Error("Failed searching for corresponding zabbix host")
 		return "", err
 	}
 
@@ -279,7 +279,6 @@ func HandleRequest(snsEvents events.SNSEvent) (string, error) {
 			}).Debug("Deleting zabbix host")
 			_, err := api.CallWithError("host.delete", []string{res[0].HostId})
 			if err != nil {
-				log.Print("Error deleting host from zabbix api:")
 				log.WithFields(log.Fields{
 					"stage":    "delete",
 					"instance": autoscalingEvent.InstanceID,
@@ -289,28 +288,46 @@ func HandleRequest(snsEvents events.SNSEvent) (string, error) {
 				return "", err
 			}
 		} else {
+			type description struct {
+				Time    time.Time
+				Action  string
+				Pending []string
+				Name    string
+			}
+
 			name := strings.Join([]string{"ZDTP", res[0].Host}, "_")
-			description := strings.Join([]string{
-				"Automatically edited from Zabbix Deregister at:",
-				time.Now().String(),
-				"Following host needs to be purged:",
-				res[0].Host,
-			}, "\n")
+
+			descriptionStruct := description{
+				Time:    time.Now(),
+				Action:  "deregistered by zabbix aws deregister",
+				Pending: []string{"purge"},
+				Name:    res[0].Host,
+			}
+			descriptionJSON, err := json.Marshal(descriptionStruct)
+			if err != nil {
+				log.WithFields(log.Fields{
+					"stage":       "update",
+					"description": descriptionStruct,
+					"host":        res[0].HostId,
+					"error":       err,
+				}).Error("Failed marshal json from description struct")
+				return "", err
+			}
 
 			log.WithFields(log.Fields{
 				"stage":       "update",
 				"instance":    autoscalingEvent.InstanceID,
 				"host":        res[0].HostId,
-				"description": description,
+				"description": string(descriptionJSON),
 				"cur_name":    res[0].Host,
 				"new_name":    name,
 				"enabled":     false,
 			}).Debug("Updating zabbix host")
-			_, err := api.CallWithError("host.update", zabbix.Params{
+			_, err = api.CallWithError("host.update", zabbix.Params{
 				"hostid":      res[0].HostId,
 				"host":        name,
 				"name":        name,
-				"description": description,
+				"description": string(descriptionJSON),
 				"status":      ZabbixHostDisable,
 			})
 			if err != nil {
@@ -318,7 +335,7 @@ func HandleRequest(snsEvents events.SNSEvent) (string, error) {
 					"stage":       "update",
 					"instance":    autoscalingEvent.InstanceID,
 					"host":        res[0].HostId,
-					"description": description,
+					"description": string(descriptionJSON),
 					"cur_name":    res[0].Host,
 					"new_name":    name,
 					"enabled":     false,
