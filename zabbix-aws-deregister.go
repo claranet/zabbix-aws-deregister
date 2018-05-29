@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"net/http"
 	"os"
 	"strconv"
@@ -16,6 +15,7 @@ import (
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/kms"
+	log "github.com/sirupsen/logrus"
 )
 
 // AutoscalingEvent structure to serialize json from Message attribute of CloudwatchEvent
@@ -35,30 +35,39 @@ type Configuration struct {
 	User     string
 	Password string
 	Deleting bool
-	Debug    bool
 }
 
 const ZabbixHostDisable = 1
 
 var Config Configuration
 
-func decrypt(encrypted string) string {
+func decrypt(encrypted string, variable string) string {
 	kmsClient := kms.New(session.New())
 	decodedBytes, err := base64.StdEncoding.DecodeString(encrypted)
 	if err != nil {
-		log.Print("impossible to decode string value:")
-		log.Print(err)
-		panic(err)
+		log.WithFields(log.Fields{
+			"stage":    "config",
+			"variable": variable,
+			"error":    err,
+		}).Panic("Failed to decode string")
 	}
 	input := &kms.DecryptInput{
 		CiphertextBlob: decodedBytes,
 	}
 	response, err := kmsClient.Decrypt(input)
 	if err != nil {
-		log.Print("Impossible to decrypt bytes from kms key:")
-		log.Print(err)
-		panic(err)
+		log.WithFields(log.Fields{
+			"stage":    "config",
+			"variable": variable,
+			"error":    err,
+		}).Panic("Failed to decrypt bytes from kms key")
 	}
+
+	log.WithFields(log.Fields{
+		"stage":    "config",
+		"variable": variable,
+	}).Debug("Configuration set")
+
 	// Plaintext is a byte array, so convert to string
 	return string(response.Plaintext[:])
 }
@@ -69,49 +78,72 @@ func init() {
 	var encryptedUser string
 	var encryptedPass string
 
-	log.Print("Initializing environment")
+	log.SetFormatter(&log.JSONFormatter{})
+	log.SetOutput(os.Stdout)
+	log.SetLevel(log.InfoLevel)
 
-	encryptedUser, ok = os.LookupEnv("ZABBIX_USER")
-	if !ok {
-		log.Print("Error parsing ZABBIX_USER environement variable not set")
-		panic(fmt.Errorf("zabbix user not set"))
+	debug := os.Getenv("DEBUG")
+	if debug != "" {
+		_, err = strconv.ParseBool(debug)
+		if err != nil {
+			log.WithFields(log.Fields{
+				"stage":    "config",
+				"error":    err,
+				"variable": "DEBUG",
+			}).Error("Failed to parse boolean")
+		} else {
+			log.SetLevel(log.DebugLevel)
+			log.WithFields(log.Fields{
+				"stage":    "config",
+				"variable": "DEBUG",
+				"value":    true,
+			}).Debug("Configuration set")
+		}
 	}
-	encryptedPass, ok = os.LookupEnv("ZABBIX_PASS")
-	if !ok {
-		log.Print("Error parsing ZABBIX_PASS environement variable not set")
-		panic(fmt.Errorf("zabbix password not set"))
-	}
-
-	Config.User = decrypt(encryptedUser)
-	Config.Password = decrypt(encryptedPass)
 
 	Config.URL, ok = os.LookupEnv("ZABBIX_URL")
 	if !ok {
-		log.Print("Error parsing ZABBIX_URL environement variable not set")
-		panic(fmt.Errorf("zabbix url not set"))
+		log.WithFields(log.Fields{
+			"stage":    "config",
+			"variable": "ZABBIX_URL",
+		}).Panic("Environment variable not set")
 	}
 	deletingHost := os.Getenv("DELETING_HOST")
 	if deletingHost != "" {
 		Config.Deleting, err = strconv.ParseBool(deletingHost)
 		if err != nil {
-			log.Print("Error parsing boolean value from DELETING_HOST environment variable:")
-			log.Print(err)
-			panic(err)
+			log.WithFields(log.Fields{
+				"stage":    "config",
+				"error":    err,
+				"variable": "DELETING_HOST",
+			}).Error("Failed to parse boolean")
 		}
 	} else {
 		Config.Deleting = false
 	}
-	debug := os.Getenv("DEBUG")
-	if debug != "" {
-		Config.Debug, err = strconv.ParseBool(debug)
-		if err != nil {
-			log.Print("Error parsing boolean value from DEBUG environment variable:")
-			log.Print(err)
-			panic(err)
-		}
-	} else {
-		Config.Debug = false
+	log.WithFields(log.Fields{
+		"stage":    "config",
+		"variable": "DELETING_HOST",
+		"value":    Config.Deleting,
+	}).Debug("Configuration set")
+
+	encryptedUser, ok = os.LookupEnv("ZABBIX_USER")
+	if !ok {
+		log.WithFields(log.Fields{
+			"stage":    "config",
+			"variable": "ZABBIX_USER",
+		}).Panic("Environment variable not set")
 	}
+	encryptedPass, ok = os.LookupEnv("ZABBIX_PASS")
+	if !ok {
+		log.WithFields(log.Fields{
+			"stage":    "config",
+			"variable": "ZABBIX_PASS",
+		}).Panic("Environment variable not set")
+	}
+
+	Config.User = decrypt(encryptedUser, "ZABBIX_USER")
+	Config.Password = decrypt(encryptedPass, "ZABBIX_PASS")
 }
 
 // HandleRequest hot start lambda function start point
@@ -119,111 +151,165 @@ func HandleRequest(snsEvents events.SNSEvent) (string, error) {
 
 	var err error
 
-	if Config.Debug {
-		log.Print("Catching SNS event from lambda parameter:")
-		snsEventsJSON, err := json.Marshal(snsEvents)
-		if err != nil {
-			log.Print("Error cannot marshal snsEvents json:")
-			log.Print(err)
-		}
-		log.Print(string(snsEventsJSON))
-	}
+	log.WithFields(log.Fields{
+		"stage": "init",
+		"event": "sns",
+		"value": &snsEvents,
+	}).Debug("Catching event")
 
 	var cloudwatchEvent events.CloudWatchEvent
 	err = json.Unmarshal([]byte(snsEvents.Records[0].SNS.Message), &cloudwatchEvent)
 	if err != nil {
-		log.Print("Error cannot unmarshal message from sns event:")
-		log.Print(err)
+		log.WithFields(log.Fields{
+			"stage": "init",
+			"event": "sns",
+			"err":   err,
+		}).Panic("Failed unmarshal json event")
 		return "", err
 	}
 
-	if Config.Debug {
-		log.Print("Catching CloudWatch event from SNS event:")
-		cloudwatchEventJSON, err := json.Marshal(cloudwatchEvent)
-		if err != nil {
-			log.Print("Error cannot marshal cloudwatchEvent json:")
-			log.Print(err)
-		}
-		log.Print(string(cloudwatchEventJSON))
-		log.Print("Catching AutoScaling event from cloudwatch event:")
-		log.Print(string(cloudwatchEvent.Detail))
-	}
+	log.WithFields(log.Fields{
+		"stage": "init",
+		"event": "cloudwatch",
+		"value": &cloudwatchEvent,
+	}).Debug("Catching event")
 
 	var autoscalingEvent AutoscalingEvent
 	err = json.Unmarshal(cloudwatchEvent.Detail, &autoscalingEvent)
 	if err != nil {
-		log.Print("Error cannot unmarshal autoscale detail from cloudwatch event:")
-		log.Print(err)
+		log.WithFields(log.Fields{
+			"stage": "init",
+			"event": "autoscaling",
+			"err":   err,
+		}).Panic("Failed unmarshal json event")
 		return "", err
 	}
+
+	log.WithFields(log.Fields{
+		"stage": "init",
+		"event": "autoscaling",
+		"value": &autoscalingEvent,
+	}).Debug("Catching event")
 
 	searchInventory := make(map[string]string)
 	searchInventory["alias"] = autoscalingEvent.InstanceID
 
-	if Config.Debug {
+	if log.GetLevel() == log.DebugLevel {
 		resp, err := http.Get("http://ip.clara.net")
 		if err != nil {
-			log.Print("Error getting internet ip address:")
-			log.Print(err)
+			log.WithFields(log.Fields{
+				"stage": "info",
+				"err":   err,
+			}).Error("Failed retrieve internet IP address")
 			return "", err
 		}
 		defer resp.Body.Close()
 		bodyBytes, _ := ioutil.ReadAll(resp.Body)
 		bodyString := string(bodyBytes)
-		log.Printf("Lambda outbound traffic from : %s", bodyString)
+		log.WithFields(log.Fields{
+			"stage": "info",
+			"value": bodyString,
+		}).Debug("Retrieving internet IP address")
 	}
 
-	log.Print("Connecting to zabbix api")
+	log.WithFields(log.Fields{
+		"stage": "init",
+		"url":   Config.URL,
+	}).Debug("Connecting to zabbix API")
 	api := zabbix.NewAPI(Config.URL)
-	log.Print("Authentificating to zabbix api")
+
+	log.WithFields(log.Fields{
+		"stage": "init",
+		"url":   Config.URL,
+		"user":  Config.User,
+	}).Debug("Loging to zabbix API")
 	_, err = api.Login(Config.User, Config.Password)
 	if err != nil {
-		log.Print("Error loging to zabbix api:")
-		log.Print(err)
+		log.WithFields(log.Fields{
+			"stage": "init",
+			"url":   Config.URL,
+			"user":  Config.User,
+			"error": err,
+		}).Panic("Failed to logging on zabbix API")
 		return "", err
 	}
-	log.Printf("Getting zabbix host corresponding to instanceid %s", autoscalingEvent.InstanceID)
+
+	log.WithFields(log.Fields{
+		"stage":    "get",
+		"instance": autoscalingEvent.InstanceID,
+	}).Debug("Searching for corresponding zabbix host")
 	res, err := api.HostsGet(zabbix.Params{
 		"output":          []string{"host"},
 		"selectInventory": []string{"alias"},
 		"searchInventory": searchInventory,
 	})
 	if err != nil {
-		log.Print("Error getting hosts from zabbix api:")
-		log.Print(err)
+		log.WithFields(log.Fields{
+			"stage":    "get",
+			"instance": autoscalingEvent.InstanceID,
+			"error":    err,
+		}).Panic("Failed searching for corresponding zabbix host")
 		return "", err
 	}
+
 	if len(res) < 1 {
-		log.Printf("Zabbix host not found for instanceid %s, do nothing", autoscalingEvent.InstanceID)
+		log.WithFields(log.Fields{
+			"stage":    "get",
+			"instance": autoscalingEvent.InstanceID,
+		}).Warn("Zabbix host not found, do nothing")
 		return fmt.Sprintf("host not found"), nil
 	} else if len(res) > 1 {
-		log.Printf("Error, more than one host found for instanceid %s, do nothing", autoscalingEvent.InstanceID)
+		log.WithFields(log.Fields{
+			"stage":    "get",
+			"instance": autoscalingEvent.InstanceID,
+		}).Fatal("More than one zabbix host found")
 		return "", fmt.Errorf("more than one hosts found")
 	} else {
 		if Config.Deleting {
-			log.Printf("Deleting zabbix host %s", res[0].HostId)
+			log.WithFields(log.Fields{
+				"stage":    "set",
+				"instance": autoscalingEvent.InstanceID,
+				"host":     res[0].HostId,
+			}).Debug("Deleting zabbix host")
 			_, err := api.CallWithError("host.delete", []string{res[0].HostId})
 			if err != nil {
 				log.Print("Error deleting host from zabbix api:")
-				log.Print(err)
+				log.WithFields(log.Fields{
+					"stage":    "set",
+					"instance": autoscalingEvent.InstanceID,
+					"host":     res[0].HostId,
+					"error":    err,
+				}).Fatal("Deleting zabbix host")
 				return "", err
 			}
 		} else {
-			log.Printf("Disabling zabbix host %s", res[0].HostId)
+			log.WithFields(log.Fields{
+				"stage":    "set",
+				"instance": autoscalingEvent.InstanceID,
+				"host":     res[0].HostId,
+			}).Debug("Disabling zabbix host")
 			_, err := api.CallWithError("host.update", zabbix.Params{
 				"hostid": res[0].HostId,
 				"status": ZabbixHostDisable,
 			})
 			if err != nil {
-				log.Print("Error disabling host from zabbix api")
-				log.Print(err)
+				log.WithFields(log.Fields{
+					"stage":    "set",
+					"instance": autoscalingEvent.InstanceID,
+					"host":     res[0].HostId,
+					"error":    err,
+				}).Fatal("Disabling zabbix host")
 				return "", err
 
 			}
 		}
 	}
 
-	log.Print("Function finished successfully")
+	log.WithFields(log.Fields{
+		"stage":    "end",
+		"instance": autoscalingEvent.InstanceID,
+		"host":     res[0].HostId,
+	}).Debug("Function finished successfully")
 	return fmt.Sprintf(autoscalingEvent.InstanceID), nil
 }
 
