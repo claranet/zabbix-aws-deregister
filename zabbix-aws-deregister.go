@@ -39,10 +39,10 @@ type Configuration struct {
 	Deleting bool
 }
 
-// Value corresponding to zabbix host disabled
+// ZabbixHostDisable value corresponding to zabbix host disabled
 const ZabbixHostDisable = 1
 
-// Global configuration structure
+// Config Global configuration structure
 var Config Configuration
 
 func decrypt(encrypted string, variable string) string {
@@ -76,6 +76,7 @@ func decrypt(encrypted string, variable string) string {
 	return string(response.Plaintext[:])
 }
 
+// init function to setup environment
 func init() {
 	var ok bool
 	var err error
@@ -217,20 +218,20 @@ func HandleRequest(snsEvents events.SNSEvent) (string, error) {
 	}
 
 	log.WithFields(log.Fields{
-		"stage": "init",
+		"stage": "connection",
 		"url":   Config.URL,
 	}).Debug("Connecting to zabbix API")
 	api := zabbix.NewAPI(Config.URL)
 
 	log.WithFields(log.Fields{
-		"stage": "init",
+		"stage": "connection",
 		"url":   Config.URL,
 		"user":  Config.User,
 	}).Debug("Loging to zabbix API")
 	_, err = api.Login(Config.User, Config.Password)
 	if err != nil {
 		log.WithFields(log.Fields{
-			"stage": "init",
+			"stage": "connection",
 			"url":   Config.URL,
 			"user":  Config.User,
 			"error": err,
@@ -272,7 +273,7 @@ func HandleRequest(snsEvents events.SNSEvent) (string, error) {
 	} else {
 		if Config.Deleting {
 			log.WithFields(log.Fields{
-				"stage":    "set",
+				"stage":    "delete",
 				"instance": autoscalingEvent.InstanceID,
 				"host":     res[0].HostId,
 			}).Debug("Deleting zabbix host")
@@ -280,7 +281,7 @@ func HandleRequest(snsEvents events.SNSEvent) (string, error) {
 			if err != nil {
 				log.Print("Error deleting host from zabbix api:")
 				log.WithFields(log.Fields{
-					"stage":    "set",
+					"stage":    "delete",
 					"instance": autoscalingEvent.InstanceID,
 					"host":     res[0].HostId,
 					"error":    err,
@@ -289,10 +290,15 @@ func HandleRequest(snsEvents events.SNSEvent) (string, error) {
 			}
 		} else {
 			name := strings.Join([]string{"ZDTP", res[0].Host}, "_")
-			description := strings.Join([]string{"Automatically edited from Zabbix Deregister:", time.Now().String(), "This host needs to be purged:", res[0].Host}, "\n")
+			description := strings.Join([]string{
+				"Automatically edited from Zabbix Deregister at:",
+				time.Now().String(),
+				"Following host needs to be purged:",
+				res[0].Host,
+			}, "\n")
 
 			log.WithFields(log.Fields{
-				"stage":       "set",
+				"stage":       "update",
 				"instance":    autoscalingEvent.InstanceID,
 				"host":        res[0].HostId,
 				"description": description,
@@ -309,7 +315,7 @@ func HandleRequest(snsEvents events.SNSEvent) (string, error) {
 			})
 			if err != nil {
 				log.WithFields(log.Fields{
-					"stage":       "set",
+					"stage":       "update",
 					"instance":    autoscalingEvent.InstanceID,
 					"host":        res[0].HostId,
 					"description": description,
@@ -324,7 +330,7 @@ func HandleRequest(snsEvents events.SNSEvent) (string, error) {
 	}
 
 	log.WithFields(log.Fields{
-		"stage":    "end",
+		"stage":    "success",
 		"instance": autoscalingEvent.InstanceID,
 		"host":     res[0].HostId,
 	}).Debug("Function finished successfully")
