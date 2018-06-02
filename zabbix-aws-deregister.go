@@ -179,6 +179,9 @@ func HandleRequest(snsEvents events.SNSEvent) (string, error) {
 	} else if len(res) > 1 {
 		requestLogger.WithFields(log.Fields{"instance": autoscalingEvent.InstanceID}).Error("More than one zabbix host found")
 		return "", fmt.Errorf("more than one hosts found")
+	} else if strings.HasPrefix(res[0].Host, "ZDTP_") {
+		requestLogger.WithFields(log.Fields{"instance": autoscalingEvent.InstanceID}).Warn("Zabbix host already updated, do nothing")
+		return fmt.Sprintf("host already updated"), nil
 	} else {
 
 		type description struct {
