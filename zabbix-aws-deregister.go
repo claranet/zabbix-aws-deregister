@@ -95,7 +95,7 @@ func init() {
 	}
 	encryptedPass, ok = os.LookupEnv("ZABBIX_PASS")
 	if !ok {
-		log.WithFields(log.Fields{"variable": "ZABBIX_PASS"}).Panic("Environment variable not set")
+		requestLogger.WithFields(log.Fields{"variable": "ZABBIX_PASS"}).Panic("Environment variable not set")
 	}
 
 	Config.User = decrypt(*requestLogger, encryptedUser, "ZABBIX_USER")
@@ -144,7 +144,7 @@ func HandleRequest(snsEvents events.SNSEvent) (string, error) {
 		defer resp.Body.Close()
 		bodyBytes, _ := ioutil.ReadAll(resp.Body)
 		bodyString := string(bodyBytes)
-		log.WithFields(log.Fields{"value": bodyString}).Debug("Retrieving internet IP address")
+		requestLogger.WithFields(log.Fields{"value": bodyString}).Debug("Retrieving internet IP address")
 	}
 
 	requestLogger = log.WithFields(log.Fields{"stage": "connection"})
@@ -217,13 +217,13 @@ func HandleRequest(snsEvents events.SNSEvent) (string, error) {
 			"status":      zabbixHostDisable,
 		})
 		if err != nil {
-			log.WithFields(log.Fields{"description": string(descriptionJSON), "cur_name": res[0].Host, "new_name": name, "enabled": false}).WithError(err).Error("Updating zabbix host")
+			requestLogger.WithFields(log.Fields{"description": string(descriptionJSON), "cur_name": res[0].Host, "new_name": name, "enabled": false}).WithError(err).Error("Updating zabbix host")
 			return "", err
 		}
 
 	}
 
-	log.WithFields(log.Fields{"stage": "success", "instance": autoscalingEvent.InstanceID, "host": res[0].HostId}).Info("Function finished successfully")
+	requestLogger.WithFields(log.Fields{"stage": "success", "instance": autoscalingEvent.InstanceID, "host": res[0].HostId}).Info("Function finished successfully")
 	return fmt.Sprintf(autoscalingEvent.InstanceID), nil
 }
 
