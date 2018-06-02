@@ -210,7 +210,7 @@ State: Enabled
 
 ## Troubleshooting
 
-To quicly test the lambda function and get result it is possible to create a test event [configure test events > Create a new test event],
+To quickly test the lambda function and get result it is possible to create a test event [configure test events > Create a new test event],
 it could be named `ScaleDown` and looks like the following json:
 
 ```json
