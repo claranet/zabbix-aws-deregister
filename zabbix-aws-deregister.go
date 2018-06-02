@@ -36,7 +36,6 @@ type Configuration struct {
 	URL      string
 	User     string
 	Password string
-	Deleting bool
 }
 
 // ZabbixHostDisable value corresponding to zabbix host disabled
@@ -79,7 +78,6 @@ func decrypt(encrypted string, variable string) string {
 // init function to setup environment
 func init() {
 	var ok bool
-	var err error
 	var encryptedUser string
 	var encryptedPass string
 
@@ -113,24 +111,6 @@ func init() {
 			"variable": "ZABBIX_URL",
 		}).Panic("Environment variable not set")
 	}
-	deletingHost := os.Getenv("DELETING_HOST")
-	if deletingHost != "" {
-		Config.Deleting, err = strconv.ParseBool(deletingHost)
-		if err != nil {
-			log.WithFields(log.Fields{
-				"stage":    "config",
-				"error":    err,
-				"variable": "DELETING_HOST",
-			}).Error("Failed to parse boolean")
-		}
-	} else {
-		Config.Deleting = false
-	}
-	log.WithFields(log.Fields{
-		"stage":    "config",
-		"variable": "DELETING_HOST",
-		"value":    Config.Deleting,
-	}).Debug("Configuration set")
 
 	encryptedUser, ok = os.LookupEnv("ZABBIX_USER")
 	if !ok {
@@ -271,49 +251,49 @@ func HandleRequest(snsEvents events.SNSEvent) (string, error) {
 		}).Error("More than one zabbix host found")
 		return "", fmt.Errorf("more than one hosts found")
 	} else {
-		if Config.Deleting {
+		type description struct {
+			Time    time.Time
+			Action  string
+			Pending []string
+			Name    string
+		}
+
+		name := strings.Join([]string{"ZDTP", res[0].Host}, "_")
+
+		descriptionStruct := description{
+			Time:    time.Now(),
+			Action:  "deregistered by zabbix aws deregister",
+			Pending: []string{"purge"},
+			Name:    res[0].Host,
+		}
+		descriptionJSON, err := json.Marshal(descriptionStruct)
+		if err != nil {
 			log.WithFields(log.Fields{
-				"stage":    "delete",
-				"instance": autoscalingEvent.InstanceID,
-				"host":     res[0].HostId,
-			}).Debug("Deleting zabbix host")
-			_, err := api.CallWithError("host.delete", []string{res[0].HostId})
-			if err != nil {
-				log.WithFields(log.Fields{
-					"stage":    "delete",
-					"instance": autoscalingEvent.InstanceID,
-					"host":     res[0].HostId,
-					"error":    err,
-				}).Error("Deleting zabbix host")
-				return "", err
-			}
-		} else {
-			type description struct {
-				Time    time.Time
-				Action  string
-				Pending []string
-				Name    string
-			}
+				"stage":       "update",
+				"description": descriptionStruct,
+				"host":        res[0].HostId,
+				"error":       err,
+			}).Error("Failed marshal json from description struct")
+			return "", err
+		}
 
-			name := strings.Join([]string{"ZDTP", res[0].Host}, "_")
-
-			descriptionStruct := description{
-				Time:    time.Now(),
-				Action:  "deregistered by zabbix aws deregister",
-				Pending: []string{"purge"},
-				Name:    res[0].Host,
-			}
-			descriptionJSON, err := json.Marshal(descriptionStruct)
-			if err != nil {
-				log.WithFields(log.Fields{
-					"stage":       "update",
-					"description": descriptionStruct,
-					"host":        res[0].HostId,
-					"error":       err,
-				}).Error("Failed marshal json from description struct")
-				return "", err
-			}
-
+		log.WithFields(log.Fields{
+			"stage":       "update",
+			"instance":    autoscalingEvent.InstanceID,
+			"host":        res[0].HostId,
+			"description": string(descriptionJSON),
+			"cur_name":    res[0].Host,
+			"new_name":    name,
+			"enabled":     false,
+		}).Debug("Updating zabbix host")
+		_, err = api.CallWithError("host.update", zabbix.Params{
+			"hostid":      res[0].HostId,
+			"host":        name,
+			"name":        name,
+			"description": string(descriptionJSON),
+			"status":      ZabbixHostDisable,
+		})
+		if err != nil {
 			log.WithFields(log.Fields{
 				"stage":       "update",
 				"instance":    autoscalingEvent.InstanceID,
@@ -322,28 +302,11 @@ func HandleRequest(snsEvents events.SNSEvent) (string, error) {
 				"cur_name":    res[0].Host,
 				"new_name":    name,
 				"enabled":     false,
-			}).Debug("Updating zabbix host")
-			_, err = api.CallWithError("host.update", zabbix.Params{
-				"hostid":      res[0].HostId,
-				"host":        name,
-				"name":        name,
-				"description": string(descriptionJSON),
-				"status":      ZabbixHostDisable,
-			})
-			if err != nil {
-				log.WithFields(log.Fields{
-					"stage":       "update",
-					"instance":    autoscalingEvent.InstanceID,
-					"host":        res[0].HostId,
-					"description": string(descriptionJSON),
-					"cur_name":    res[0].Host,
-					"new_name":    name,
-					"enabled":     false,
-					"error":       err,
-				}).Error("Updating zabbix host")
-				return "", err
-			}
+				"error":       err,
+			}).Error("Updating zabbix host")
+			return "", err
 		}
+
 	}
 
 	log.WithFields(log.Fields{

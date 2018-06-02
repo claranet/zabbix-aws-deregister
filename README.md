@@ -1,7 +1,15 @@
 # Zabbix Deregister for AWS AutoScaling
 
-Disable or Delete host from zabbix automatically when AWS autoscaling group terminates its corresponding instance:
-Cloudwatch event rule catchs the scale down event from autoscaling group then run a lambda function which will connect to Zabbix API to update host.
+A lambda function which disable host from zabbix automatically when AWS autoscaling group terminates its corresponding instance.
+The host is renamed to avoid collision with new host from same address and its description is updated to allow later purge.
+
+Here are steps of the workflow:
+
+1. Cloudwatch event rule on the source account catchs the scale down event from autoscaling group and push to event bus of the destination account.
+
+2. Similar cloudwatch event rule on the destination account catchs the event and push it to a dedicated SNS topic.
+
+3. The SNS topic will trigger the lambda function which will connect to Zabbix API to update host.
 
 ## Zabbix configuration
 
@@ -142,7 +150,6 @@ Environment variables:
     ZABBIX_URL: https://zabbix.host.tld/api_jsonrpc.php
     ZABBIX_USER: previously created user from "Zabbix administration" step (aws-autoScaling-deregister)
     ZABBIX_PASS: previously created password from "Zabbix administration" step
-    DELETING_HOST: true / false
     DEBUG: true / false
     Encryption configuration:
         Enable helpers for encryption in transit: [x]
@@ -153,8 +160,6 @@ Execution role: set the previously created role
 ```
 
 Then, click on `encrypt` button for both `ZABBIX_USER` and `ZABBIX_PASS` environment variables.
-
-Notice: if `DELETING_HOST` is set to `false` so zabbix hosts are not deleted, only disabled.
 
 6/ Create an sns topic and subscribe [AWS console > SNS > Topics > Create topic]
 
