@@ -38,9 +38,6 @@ type Configuration struct {
 	Password string
 }
 
-// ZabbixHostDisable value corresponding to zabbix host disabled
-const ZabbixHostDisable = 1
-
 // Config Global configuration structure
 var Config Configuration
 
@@ -133,7 +130,8 @@ func init() {
 
 // HandleRequest hot start lambda function start point
 func HandleRequest(snsEvents events.SNSEvent) (string, error) {
-
+	const zabbixHostDisable = 1
+	const getIP = "http://ip.clara.net"
 	var err error
 
 	log.WithFields(log.Fields{
@@ -180,7 +178,7 @@ func HandleRequest(snsEvents events.SNSEvent) (string, error) {
 	searchInventory["alias"] = autoscalingEvent.InstanceID
 
 	if log.GetLevel() == log.DebugLevel {
-		resp, err := http.Get("http://ip.clara.net")
+		resp, err := http.Get(getIP)
 		if err != nil {
 			log.WithFields(log.Fields{
 				"stage": "info",
@@ -291,7 +289,7 @@ func HandleRequest(snsEvents events.SNSEvent) (string, error) {
 			"host":        name,
 			"name":        name,
 			"description": string(descriptionJSON),
-			"status":      ZabbixHostDisable,
+			"status":      zabbixHostDisable,
 		})
 		if err != nil {
 			log.WithFields(log.Fields{
