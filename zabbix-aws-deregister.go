@@ -191,7 +191,10 @@ func HandleRequest(snsEvents events.SNSEvent) (string, error) {
 			Name    string
 		}
 
-		name := strings.Join([]string{"ZDTP", res[0].Host}, "_")
+		// add instance id to be sure to get an unique host name
+		name := strings.Join([]string{"ZDTP", autoscalingEvent.InstanceID[2:], res[0].Host}, "_")
+		// truncate to avoid error host name max length
+		name = string(name[0:127])
 
 		descriptionStruct := description{
 			Time:    time.Now(),
