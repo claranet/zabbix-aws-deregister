@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"encoding/base64"
 
@@ -105,6 +106,7 @@ func init() {
 // HandleRequest hot start lambda function start point
 func HandleRequest(snsEvents events.SNSEvent) (string, error) {
 	const zabbixHostDisable = 1
+	const maxHostLenght = 127
 	const getIP = "http://ip.clara.net"
 	var err error
 
@@ -193,8 +195,11 @@ func HandleRequest(snsEvents events.SNSEvent) (string, error) {
 
 		// add instance id to be sure to get an unique host name
 		name := strings.Join([]string{"ZDTP", autoscalingEvent.InstanceID[2:], res[0].Host}, "_")
-		// truncate to avoid error host name max length
-		name = string(name[0:127])
+		if utf8.RuneCountInString(name) > maxHostLenght {
+			requestLogger.WithFields(log.Fields{"name": name}).Debug("Troncate name to keep it below the zabbix hostname limit")
+			// truncate to avoid error host name max length
+			name = string(name[0:maxHostLenght])
+		}
 
 		descriptionStruct := description{
 			Time:    time.Now(),
