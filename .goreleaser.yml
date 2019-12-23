@@ -1,0 +1,15 @@
+before:
+  hooks:
+    - go mod tidy
+builds:
+  - goos:
+      - linux
+    goarch:
+      - amd64
+    env:
+      - GO111MODULE=on
+archives:
+  - format: zip
+    files:
+      - LICENSE
+      - README.md
