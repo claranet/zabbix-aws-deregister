@@ -75,7 +75,7 @@ Build and zip `zabbix-aws-deregister.go` :
 
     $ cd go/src/zabbix-aws-deregister && go get && go build && zip zabbix-aws-deregister.zip zabbix-aws-deregister
 
-Or simply use [the zip provided in this repo](https://bitbucket.org/morea/zabbix/downloads/zabbix-aws-deregister.zip)
+Or simply use [the zip provided in this repo](https://github.com/claranet/zabbix-aws-deregister/releases/download/v1.0.0/zabbix-aws-deregister_1.0.0_linux_amd64.zip)
 
 ## AWS configuration
 
